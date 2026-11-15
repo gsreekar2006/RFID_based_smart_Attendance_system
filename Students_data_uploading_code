@@ -1,0 +1,150 @@
+#include <SPI.h>
+#include <MFRC522.h>
+
+// ------------------- RFID Setup -------------------
+const uint8_t RST_PIN = D3;
+const uint8_t SS_PIN  = D4;
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+MFRC522::MIFARE_Key key;
+MFRC522::StatusCode status;
+
+// Timeout per input in milliseconds
+const unsigned long INPUT_TIMEOUT = 120000; // 2 minutes = 120,000 ms
+
+void setup() {
+  Serial.begin(9600);
+  SPI.begin();
+  mfrc522.PCD_Init();
+
+  Serial.println("Scan RFID Card...");
+}
+
+void loop() {
+  // Default key for authentication
+  for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
+
+  // Wait for new card
+  if (!mfrc522.PICC_IsNewCardPresent()) return;
+  if (!mfrc522.PICC_ReadCardSerial()) return;
+
+  Serial.println("\n** Card Detected **");
+  Serial.print("UID: ");
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    Serial.print(mfrc522.uid.uidByte[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
+
+  byte buffer[18];
+
+  // ------------------- CLEAR or WRITE -------------------
+  Serial.println("Type CLEAR# to erase card");
+  Serial.println("OR enter Student ID ending with #");
+  readInputFromSerialWithTimeout((char*)buffer, 16, INPUT_TIMEOUT);
+
+  // ================= CLEAR MODE =================
+  if (strcmp((char*)buffer, "CLEAR") == 0) {
+    Serial.println("Clearing card...");
+    memset(buffer, ' ', 16);
+
+    WriteDataToBlock(4, buffer);
+    WriteDataToBlock(5, buffer);
+    WriteDataToBlock(6, buffer);
+    WriteDataToBlock(8, buffer);
+    WriteDataToBlock(9, buffer);
+
+    Serial.println("Card cleared successfully!");
+    haltCard();
+    delay(2000);
+    return;
+  }
+
+  // ================= WRITE MODE =================
+  memset(buffer + strlen((char*)buffer), ' ', 16 - strlen((char*)buffer));
+  WriteDataToBlock(4, buffer); // Student ID
+
+  // ------------------- First Name -------------------
+  Serial.println("Enter First Name ending with #");
+  readInputFromSerialWithTimeout((char*)buffer, 16, INPUT_TIMEOUT);
+  memset(buffer + strlen((char*)buffer), ' ', 16 - strlen((char*)buffer));
+  WriteDataToBlock(5, buffer);
+
+  // ------------------- Father Name -------------------
+  Serial.println("Enter Father Name ending with #");
+  readInputFromSerialWithTimeout((char*)buffer, 16, INPUT_TIMEOUT);
+  memset(buffer + strlen((char*)buffer), ' ', 16 - strlen((char*)buffer));
+  WriteDataToBlock(6, buffer);
+
+  // ------------------- Phone Number -------------------
+  Serial.println("Enter Phone Number ending with #");
+  readInputFromSerialWithTimeout((char*)buffer, 16, INPUT_TIMEOUT);
+  memset(buffer + strlen((char*)buffer), ' ', 16 - strlen((char*)buffer));
+  WriteDataToBlock(8, buffer);
+
+  // ------------------- Class -------------------
+  Serial.println("Enter Class ending with #");
+  readInputFromSerialWithTimeout((char*)buffer, 16, INPUT_TIMEOUT);
+  memset(buffer + strlen((char*)buffer), ' ', 16 - strlen((char*)buffer));
+  WriteDataToBlock(9, buffer);
+
+  // ------------------- Success -------------------
+  Serial.println("Student data saved successfully!");
+  haltCard();
+  delay(2000);
+}
+
+// ------------------- FUNCTIONS -------------------
+
+// Read serial input until '#' or timeout
+bool readInputFromSerialWithTimeout(char* buffer, byte maxLen, unsigned long timeoutMs) {
+  byte index = 0;
+  unsigned long startTime = millis();
+  while (true) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == '#') {
+        buffer[index] = '\0';
+        return true; // Input finished
+      }
+      if (index < maxLen - 1) {
+        buffer[index++] = c;
+      }
+    }
+    // Check timeout
+    if (millis() - startTime > timeoutMs) {
+      buffer[index] = '\0'; // End string if timeout
+      Serial.println("Time exceeded! Moving to next step...");
+      return false;
+    }
+  }
+}
+
+// Write 16 bytes to RFID block
+void WriteDataToBlock(byte blockNum, byte blockData[]) {
+  status = mfrc522.PCD_Authenticate(
+      MFRC522::PICC_CMD_MF_AUTH_KEY_A,
+      blockNum,
+      &key,
+      &(mfrc522.uid));
+
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print("Auth failed: ");
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+
+  status = mfrc522.MIFARE_Write(blockNum, blockData, 16);
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print("Write failed: ");
+    Serial.println(mfrc522.GetStatusCodeName(status));
+  }
+}
+
+// Halt RFID card
+void haltCard() {
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+  Serial.println("Remove card...");
+  delay(1500);
+}
